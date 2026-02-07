@@ -4,18 +4,23 @@ description: >
   Set up the RALPH autonomous loop workflow in a repository. Use when the user asks to
   "set up ralph", "init ralph", "add the loop", "setup the build loop", "add PROMPT files",
   or wants to configure autonomous plan/build iteration for a project. Generates AGENTS.md,
-  PROMPT_plan.md, PROMPT_build.md, and loop.sh — tailored to the detected project structure.
+  PROMPT_plan.md, PROMPT_build.md, loop.sh, and Docker support files — tailored to the
+  detected project structure.
 argument-hint: "[goal description]"
 ---
 
 # RALPH Setup — Autonomous Plan/Build Loop
 
-Generate the four workflow files for the Ralph Wiggum apporach to autonomous agents:
+Generate the workflow files for the Ralph Wiggum approach to autonomous agents:
 
 1. **AGENTS.md** — Operational notes for Claude (build commands, project layout, validation)
 2. **PROMPT_plan.md** — Instructions for the planning phase
 3. **PROMPT_build.md** — Instructions for the build phase
 4. **loop.sh** — Shell script that drives plan/build iterations
+5. **docker/Dockerfile** — Container image with Claude Code CLI and language runtime
+6. **docker/entrypoint.sh** — Container entrypoint that clones, installs deps, and runs the loop
+7. **loop-docker.sh** — Host-side script that builds and runs the Docker container
+8. **.dockerignore** — Excludes build artifacts from Docker context
 
 ## Step 1: Auto-Detect Project Structure
 
@@ -30,6 +35,7 @@ Analyse the repository to detect as much as possible. Check these files/patterns
 | Specs/docs | `specs/`, `spec/`, `docs/`, `requirements/` directories |
 | Entrypoint | `main.py`, `app.py`, `index.ts`, `main.go`, etc. |
 | CI config | `.github/workflows/`, `.gitlab-ci.yml` |
+| Pre-commit config | `.pre-commit-config.yaml` |
 
 Extract these values:
 - **PACKAGE_MANAGER**: e.g. `uv`, `npm`, `poetry`, `cargo`
@@ -46,6 +52,9 @@ Extract these values:
 - **PACKAGE_ROOT**: the import root, e.g. `src/my_package`
 - **TEST_CONFIG_NOTES**: e.g. `testpaths = ["tests"], pythonpath = ["src"]`
 - **DB_FIXTURE_HINT**: e.g. `Use DATABASE_URL=sqlite:///:memory: for test fixtures.` (if relevant)
+- **HAS_PRECOMMIT**: boolean — whether `.pre-commit-config.yaml` exists in the repo root
+- **LANGUAGE_RUNTIME**: derived from PACKAGE_MANAGER — `uv`/`poetry`/`pip` → `python`, `npm`/`yarn`/`pnpm` → `node`, `cargo` → `rust`, `go` → `go`, else → `other`
+- **LANGUAGE_VERSION_NUMBER**: bare version extracted from LANGUAGE_VERSION (e.g. `Python 3.12` → `3.12`, `Node 20` → `20`)
 
 ## Step 2: Ask the User for Missing Information
 
@@ -157,15 +166,74 @@ If there is no specs directory, remove spec references (lines 0a, the spec-relat
 
 Copy the file from `<skill_path>/scripts/loop.sh` into the repo root. Make it executable with `chmod +x loop.sh`.
 
-## Step 4: Add `logs/` to `.gitignore`
+### 3e. docker/Dockerfile
 
-The loop script writes raw JSONL logs to a `logs/` directory. Ensure this directory is git-ignored:
+Create the `docker/` directory. Copy `<skill_path>/scripts/docker/Dockerfile` into `docker/Dockerfile`, then replace the `{LANGUAGE_RUNTIME_LINE}` placeholder based on `LANGUAGE_RUNTIME`:
+
+| LANGUAGE_RUNTIME | Line(s) to emit |
+|-----------------|-----------------|
+| `python` | `RUN uv python install {LANGUAGE_VERSION_NUMBER}` |
+| `node` | *(omit entirely — Node is already in the base image)* |
+| `go` | `RUN curl -fsSL https://go.dev/dl/go{LANGUAGE_VERSION_NUMBER}.linux-amd64.tar.gz \| tar -C /home/claude -xzf -` followed by `ENV GOROOT="/home/claude/go"` and `ENV PATH="/home/claude/go/bin:$PATH"` |
+| `rust` | `RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh -s -- -y --default-toolchain {LANGUAGE_VERSION_NUMBER}` followed by `ENV PATH="/home/claude/.cargo/bin:$PATH"` |
+| `other` | `# TODO: Install language runtime for your project` |
+
+### 3f. docker/entrypoint.sh
+
+Copy `<skill_path>/scripts/docker/entrypoint.sh` into `docker/entrypoint.sh`. Make it executable with `chmod +x`. Then replace the placeholders:
+
+- Replace `{INSTALL_COMMAND}` with the value detected in Step 1 (e.g. `uv sync --all-extras`, `npm install`).
+- Replace `{PRECOMMIT_BLOCK}` based on `HAS_PRECOMMIT`:
+  - If **true**, emit two lines using the appropriate runner prefix for the package manager:
+    - `uv` → `uv run pre-commit install` and `uv run pre-commit install-hooks`
+    - `npm`/`yarn`/`pnpm` → `npx pre-commit install` and `npx pre-commit install-hooks`
+    - `poetry` → `poetry run pre-commit install` and `poetry run pre-commit install-hooks`
+    - Other (`cargo`, `go`, etc.) → `pre-commit install` and `pre-commit install-hooks` (direct invocation)
+  - If **false**, omit the `{PRECOMMIT_BLOCK}` line entirely.
+
+### 3g. loop-docker.sh
+
+Copy the file from `<skill_path>/scripts/loop-docker.sh` into the repo root. Make it executable with `chmod +x loop-docker.sh`.
+
+### 3h. .dockerignore
+
+Write a `.dockerignore` in the repo root. Start with common entries, then add language-specific ones:
+
+**Common entries (always included):**
+```
+.git
+logs
+node_modules
+```
+
+**Language-specific additions:**
+
+| LANGUAGE_RUNTIME | Additional entries |
+|-----------------|-------------------|
+| `python` | `.venv`, `.ruff_cache`, `.pytest_cache`, `__pycache__`, `*.pyc` |
+| `rust` | `target/` |
+| `go` | `vendor/` (only if `vendor/` directory exists) |
+| `node`, `other` | *(none beyond common)* |
+
+### 3i. .env.example
+
+Write a `.env.example` in the repo root as a template for required secrets:
+
+```
+ANTHROPIC_API_KEY=
+GITHUB_PAT=
+```
+
+This file is committed to the repo. The actual `.env` file (with real values) is gitignored.
+
+## Step 4: Add `logs/` and `.env` to `.gitignore`
+
+The loop script writes raw JSONL logs to a `logs/` directory, and `.env` contains secrets. Ensure both are git-ignored:
 
 1. Check if a `.gitignore` file exists in the repo root.
-   - If it does, read it and check whether `logs/` (or `logs`) is already listed.
-   - If it's already ignored, skip this step.
-   - If not, append `logs/` to the existing `.gitignore`.
-2. If no `.gitignore` exists, create one containing `logs/`.
+   - If it does, read it and append any missing entries from: `logs/`, `.env`.
+   - Skip entries that are already listed.
+2. If no `.gitignore` exists, create one containing `logs/` and `.env`.
 
 ## Step 5: Create specs/ directory (if agreed)
 
@@ -175,6 +243,9 @@ If the user agreed to create a specs directory, create `specs/` and add a placeh
 
 After generating all files, print a summary showing:
 - Which files were created
-- How to use the loop: `./loop.sh plan` for planning, `./loop.sh` for building
+- How to use the loop locally: `./loop.sh plan` for planning, `./loop.sh` for building
+- How to use the loop via Docker: `./loop-docker.sh plan` for planning, `./loop-docker.sh` for building
+- **Important**: commit and push all generated files before running `./loop-docker.sh` — the container clones from GitHub so unpushed files won't be available
+- Secrets: copy `.env.example` to `.env` and fill in `ANTHROPIC_API_KEY` and `GITHUB_PAT`
 - Remind the user to create an `IMPLEMENTATION_PLAN.md` by running `./loop.sh plan`
 - Note that `AGENTS.md` should be kept up to date as the project evolves
