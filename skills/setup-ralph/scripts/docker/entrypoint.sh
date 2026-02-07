@@ -31,4 +31,4 @@ cd /workspace/repo
 export DISABLE_AUTOUPDATER=1
 
 # ─── Hand off to loop.sh ────────────────────────────────────────
-exec ./loop.sh "$@"
+exec ./docker/loop.sh "$@"

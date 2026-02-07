@@ -24,7 +24,7 @@ Each skill is a self-contained directory under `skills/`. The `SKILL.md` frontma
 ## Current Skills
 
 - **python-bootstrap** (`/python-bootstrap`) — Scaffolds a Python project with uv, ruff, pyright (strict), pytest, pre-commit, and GitHub Actions CI. Runs `scripts/bootstrap.py` which generates all config and verifies tooling passes.
-- **setup-ralph** (`/setup-ralph`) — Sets up an autonomous plan/build loop (RALPH) in a target repo. Auto-detects project structure, generates `AGENTS.md`, `PROMPT_plan.md`, `PROMPT_build.md`, `loop.sh`, and Docker support files (`docker/Dockerfile`, `docker/entrypoint.sh`, `loop-docker.sh`, `.dockerignore`) for running the loop in a container. The loop script drives iterative Claude invocations with stale-detection and cost tracking.
+- **setup-ralph** (`/setup-ralph`) — Sets up an autonomous plan/build loop (RALPH) in a target repo. Auto-detects project structure, generates `AGENTS.md`, `PROMPT_plan.md`, `PROMPT_build.md`, `loop.sh`, and Docker files (`docker/Dockerfile`, `docker/entrypoint.sh`, `docker/loop.sh`, `.dockerignore`). The loop runs exclusively in Docker for isolation — `loop.sh` builds the image and runs the container, while `docker/loop.sh` orchestrates Claude invocations inside it with stale-detection and cost tracking.
 
 ## Adding a New Skill
 

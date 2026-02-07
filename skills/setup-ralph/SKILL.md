@@ -4,22 +4,22 @@ description: >
   Set up the RALPH autonomous loop workflow in a repository. Use when the user asks to
   "set up ralph", "init ralph", "add the loop", "setup the build loop", "add PROMPT files",
   or wants to configure autonomous plan/build iteration for a project. Generates AGENTS.md,
-  PROMPT_plan.md, PROMPT_build.md, loop.sh, and Docker support files — tailored to the
-  detected project structure.
+  PROMPT_plan.md, PROMPT_build.md, and Docker-based loop files — tailored to the detected
+  project structure.
 argument-hint: "[goal description]"
 ---
 
-# RALPH Setup — Autonomous Plan/Build Loop
+# RALPH Setup — Autonomous Plan/Build Loop (Docker)
 
-Generate the workflow files for the Ralph Wiggum approach to autonomous agents:
+Generate the workflow files for the Ralph Wiggum approach to autonomous agents. Everything runs inside a Docker container for isolation and security.
 
 1. **AGENTS.md** — Operational notes for Claude (build commands, project layout, validation)
 2. **PROMPT_plan.md** — Instructions for the planning phase
 3. **PROMPT_build.md** — Instructions for the build phase
-4. **loop.sh** — Shell script that drives plan/build iterations
+4. **loop.sh** — Host-side script that builds and runs the Docker container
 5. **docker/Dockerfile** — Container image with Claude Code CLI and language runtime
 6. **docker/entrypoint.sh** — Container entrypoint that clones, installs deps, and runs the loop
-7. **loop-docker.sh** — Host-side script that builds and runs the Docker container
+7. **docker/loop.sh** — Orchestrator that drives plan/build iterations inside the container
 8. **.dockerignore** — Excludes build artifacts from Docker context
 
 ## Step 1: Auto-Detect Project Structure
@@ -191,9 +191,9 @@ Copy `<skill_path>/scripts/docker/entrypoint.sh` into `docker/entrypoint.sh`. Ma
     - Other (`cargo`, `go`, etc.) → `pre-commit install` and `pre-commit install-hooks` (direct invocation)
   - If **false**, omit the `{PRECOMMIT_BLOCK}` line entirely.
 
-### 3g. loop-docker.sh
+### 3g. docker/loop.sh
 
-Copy the file from `<skill_path>/scripts/loop-docker.sh` into the repo root. Make it executable with `chmod +x loop-docker.sh`.
+Copy the file from `<skill_path>/scripts/docker/loop.sh` into `docker/loop.sh`. Make it executable with `chmod +x docker/loop.sh`.
 
 ### 3h. .dockerignore
 
@@ -243,9 +243,8 @@ If the user agreed to create a specs directory, create `specs/` and add a placeh
 
 After generating all files, print a summary showing:
 - Which files were created
-- How to use the loop locally: `./loop.sh plan` for planning, `./loop.sh` for building
-- How to use the loop via Docker: `./loop-docker.sh plan` for planning, `./loop-docker.sh` for building
-- **Important**: commit and push all generated files before running `./loop-docker.sh` — the container clones from GitHub so unpushed files won't be available
+- How to run: `./loop.sh plan` for planning, `./loop.sh` for building
+- **Important**: commit and push all generated files before running `./loop.sh` — the container clones from GitHub so unpushed files won't be available
 - Secrets: copy `.env.example` to `.env` and fill in `ANTHROPIC_API_KEY` and `GITHUB_PAT`
 - Remind the user to create an `IMPLEMENTATION_PLAN.md` by running `./loop.sh plan`
 - Note that `AGENTS.md` should be kept up to date as the project evolves
