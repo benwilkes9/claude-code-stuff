@@ -98,6 +98,11 @@ Run these after implementing to get immediate feedback:
 - Test config: {TEST_CONFIG_NOTES}.
 - {DB_FIXTURE_HINT}
 
+### Plan Conventions
+
+- Tasks in `IMPLEMENTATION_PLAN.md` use `[ ]` (incomplete) and `[x]` (complete).
+- A task is complete when all its required tests exist and pass. Update status as part of each iteration.
+
 ### Codebase Patterns
 
 - Type annotations are mandatory ({TYPECHECK_MODE}).
@@ -118,7 +123,16 @@ Write `PROMPT_plan.md` in the repo root:
 0e. Before starting new work, check `git status` for uncommitted changes from a previous iteration. If any exist, review them and `git add -A && git commit` with a message describing those changes, then `git push`.
 0f. Review project-level files (`README.md`, `{CONFIG_FILE}`) and plan updates needed so that a new developer can clone the repo, follow the README, and have the app running. Include documentation tasks in the plan.
 
-1. Study @IMPLEMENTATION_PLAN.md (if present; it may be incorrect) and use up to 500 Sonnet subagents to study existing source code in `{SRC_WILDCARD}` and `{TESTS_WILDCARD}` and compare it against `{SPECS_DIR}*`. Use an Opus subagent to analyze findings, prioritize tasks, and create/update @IMPLEMENTATION_PLAN.md as a bullet point list sorted in priority of items yet to be implemented. Ultrathink. Consider searching for TODO, minimal implementations, placeholders, skipped/flaky tests, and inconsistent patterns. Study @IMPLEMENTATION_PLAN.md to determine starting point for research and keep it up to date with items considered complete/incomplete using subagents. For each task in the plan, derive required tests from the acceptance criteria in the relevant spec — what specific outcomes need verification. Tests verify WHAT works (behavior, edge cases), not HOW it's implemented. Include required tests as part of each task definition.
+1. Study @IMPLEMENTATION_PLAN.md (if present; it may be incorrect) and use up to 500 Sonnet subagents to study existing source code in `{SRC_WILDCARD}` and `{TESTS_WILDCARD}` and compare it against `{SPECS_DIR}*`. Use an Opus subagent to analyze findings, prioritize tasks, and create/update @IMPLEMENTATION_PLAN.md. Ultrathink. Consider searching for TODO, minimal implementations, placeholders, skipped/flaky tests, and inconsistent patterns.
+
+TASK FORMAT: Each task in the plan must follow this structure:
+- **Title** with a `[ ]` (incomplete) or `[x]` (complete) checkbox. Mark tasks `[x]` if the code and tests already exist and pass — verify by searching the codebase, do not assume.
+- **Description** of what to implement.
+- **Spec(s):** which spec file(s) the task derives from. The build loop uses this to know which specs to read.
+- **Tests:** specific, concrete test scenarios derived from acceptance criteria. Each test should describe a verifiable outcome, not vague assertions (e.g., "tests pass"). Tests verify WHAT works (behavior, edge cases), not HOW it's implemented.
+- **Status:** `[ ]` or `[x]`
+
+PRIORITY ORDER: Sort tasks by dependency and priority — foundational tasks first (dependencies, DB layer, app scaffold), then core features, then advanced features, then cross-cutting concerns (error handling, validation), then documentation.
 
 IMPORTANT: Plan only. Do NOT implement anything. Do NOT assume functionality is missing; confirm with code search first. Treat `{PACKAGE_ROOT}` as the project's package root.
 
@@ -136,15 +150,16 @@ If there is no specs directory and the user chose not to create one, remove all 
 Write `PROMPT_build.md` in the repo root:
 
 ```markdown
-0a. Study `{SPECS_DIR}*` with up to 500 parallel Sonnet subagents to learn the application specifications.
-0b. Study @IMPLEMENTATION_PLAN.md.
-0c. For reference, the application source code is in `{SRC_WILDCARD}` and tests are in `{TESTS_WILDCARD}`.
-0d. Before starting new work, check `git status` for uncommitted changes from a previous iteration. If any exist, run the tests for the affected code — if they pass, `git add -A && git commit` with a message describing those changes and `git push`. If they fail, fix them first.
+SCOPE: You are ONE iteration of a loop. Implement exactly ONE task from @IMPLEMENTATION_PLAN.md — the highest-priority incomplete item. After ALL tests pass (not just your task's tests — the entire suite) and you have committed and pushed, STOP. Do not look for more work. Do not start the next task. Your job is done.
 
-1. Your task is to implement functionality per the specifications using parallel subagents. Follow @IMPLEMENTATION_PLAN.md and choose the most important item to address. Before making changes, search the codebase (don't assume not implemented) using Sonnet subagents. You may use up to 500 parallel Sonnet subagents for searches/reads and only 1 Sonnet subagent for build/tests. Use Opus subagents when complex reasoning is needed (debugging, architectural decisions).
+0a. Study @IMPLEMENTATION_PLAN.md — this is your task list and primary source of truth for what to do next.
+0b. For reference, the application source code is in `{SRC_WILDCARD}` and tests are in `{TESTS_WILDCARD}`.
+0c. Before starting new work, check `git status` for uncommitted changes from a previous iteration. If any exist, run the tests for the affected code — if they pass, `git add -A && git commit` with a message describing those changes and `git push`. If they fail, fix them first.
+
+1. Pick the highest-priority incomplete (`[ ]`) task from @IMPLEMENTATION_PLAN.md. Before implementing, verify whether it's already done — search the codebase and run its required tests. If they all pass, mark it `[x]` in the plan and continue down the list to the next `[ ]` task. Repeat until you find a genuinely incomplete task — that is your ONE task for this iteration. If every task is `[x]` and all tests pass, update the plan, commit, push, and STOP. For implementation: search the codebase first (don't assume not implemented) using Sonnet subagents. You may use up to 500 parallel Sonnet subagents for searches/reads and only 1 Sonnet subagent for build/tests. Use Opus subagents when complex reasoning is needed (debugging, architectural decisions).
 2. After implementing functionality or resolving problems, run all required tests specified in the task definition. Tasks include required tests — implement tests as part of task scope. All required tests must exist and pass before the task is considered complete. If functionality is missing then it's your job to add it as per the application specifications. Ultrathink.
 3. When you discover issues, immediately update @IMPLEMENTATION_PLAN.md with your findings using a subagent. When resolved, update and remove the item.
-4. When the tests pass, update @IMPLEMENTATION_PLAN.md, then `git add -A` then `git commit` with a message describing the changes. After the commit, `git push`.
+4. Run the FULL test suite, not just the tests for your task. If anything fails — including tests unrelated to your work — fix it before committing. When all tests pass, mark your task `[x]` in @IMPLEMENTATION_PLAN.md, run the validation steps from @AGENTS.md, then `git add -A` then `git commit` with a message describing the changes. After the commit, `git push`. Then STOP — the outer loop will start the next iteration with a fresh context.
 
 9999. Required tests derived from acceptance criteria must exist and pass before committing. Tests are part of implementation scope, not optional.
 99999. Important: When authoring documentation, capture the why — tests and implementation importance.
@@ -156,11 +171,11 @@ Write `PROMPT_build.md` in the repo root:
 99999999999. For any bugs you notice, resolve them or document them in @IMPLEMENTATION_PLAN.md using a subagent even if it is unrelated to the current piece of work.
 999999999999. Implement functionality completely. Placeholders and stubs waste efforts and time redoing the same work.
 9999999999999. When @IMPLEMENTATION_PLAN.md becomes large periodically clean out the items that are completed from the file using a subagent.
-99999999999999. If you find inconsistencies in the specs/* then use an Opus subagent with 'ultrathink' requested to update the specs.
+99999999999999. Do NOT create or modify spec files in `{SPECS_DIR}*`. Only implement what is already in @IMPLEMENTATION_PLAN.md. If you find a spec inconsistency, document it in the plan for a human to resolve.
 999999999999999. IMPORTANT: Keep @AGENTS.md operational only — status updates and progress notes belong in `IMPLEMENTATION_PLAN.md`. A bloated AGENTS.md pollutes every future loop's context.
 ```
 
-If there is no specs directory, remove spec references (lines 0a, the spec-related parts of step 1, and the final spec inconsistency rule).
+If there is no specs directory, remove spec references (line 0b and the spec inconsistency rule 99999999999999).
 
 ### 3d. loop.sh
 

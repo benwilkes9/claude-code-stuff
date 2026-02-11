@@ -8,7 +8,7 @@ A personal collection of Claude Code artifacts — custom skills, plugins, and c
 Scaffolds a new Python project with a production-ready toolchain: uv, ruff, pyright (strict), pytest, pre-commit hooks, and GitHub Actions CI.
 
 ### `/setup-ralph`
-Sets up an autonomous plan/build loop (RALPH) in a repository. Generates `AGENTS.md`, `PROMPT_plan.md`, `PROMPT_build.md`, `loop.sh`, and Docker files (`docker/Dockerfile`, `docker/entrypoint.sh`, `docker/loop.sh`, `.dockerignore`). The loop runs exclusively in Docker for isolation — `loop.sh` builds the image and runs the container, `docker/loop.sh` orchestrates Claude invocations inside it. Tailored to the detected project structure.
+Sets up an autonomous plan/build loop (RALPH) in a repository. Generates `AGENTS.md`, `PROMPT_plan.md`, `PROMPT_build.md`, `loop.sh`, and Docker files (`docker/Dockerfile`, `docker/entrypoint.sh`, `docker/loop.sh`, `.dockerignore`). The loop runs exclusively in Docker for isolation — `loop.sh` builds the image, mounts a `logs/` volume, runs the container, and syncs the local branch afterwards. `docker/loop.sh` orchestrates Claude invocations inside with stale-detection, peak context / subagent token tracking, and per-iteration cost summaries. Build mode enforces one-task-per-iteration scope with specs treated as read-only. Tailored to the detected project structure.
 
 ## Claude Code Configuration
 

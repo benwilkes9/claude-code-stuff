@@ -24,37 +24,63 @@ CYAN='\033[0;36m'   ; BCYAN='\033[1;36m'
 WHITE='\033[0;37m'  ; BWHITE='\033[1;37m'
 
 # ─── jq filter: human-readable lines from stream-json ─────────────
+# Processes the JSONL stream line-by-line. Three event types are handled:
+#   "assistant" → tool calls (· Read ...) and subagent spawns (▶ Explore ...)
+#   "user"      → subagent completions (✓ duration, tool calls, tokens)
+# Everything else is ignored. The iteration summary (context + cost) is
+# computed post-hoc in run_claude() since jq cannot track state across lines.
 JQ_FILTER='
   def green: "\u001b[32m" + . + "\u001b[0m";
   def red:   "\u001b[1;31m" + . + "\u001b[0m";
   def dim:   "\u001b[2m" + . + "\u001b[0m";
+  def kfmt:  if . >= 1000000 then ((. / 100000 | floor) / 10 | tostring) + "M"
+              elif . >= 1000 then ((. / 100 | floor) / 10 | tostring) + "k"
+              else tostring end;
 
+  # ── assistant messages: text output + tool calls ──
   if .type == "assistant" then
     (.message.content[]? |
       if .type == "text" then
         ("\u001b[1m\u001b[37m" + .text + "\u001b[0m")
       elif .type == "tool_use" then
-        ("  \u001b[36m" + .name + "\u001b[0m \u001b[2m" + (.input | keys | join(", ")) + "\u001b[0m")
+        if .name == "Task" then
+          ("  \u001b[1;36m\u25b6 " + (.input.subagent_type // .input.sub_agent_type // "agent") + "\u001b[0m  \u001b[37m\"" + (.input.description // "\u2014") + "\"\u001b[0m" +
+            (if .input.model then "  \u001b[2mmodel=\u001b[0m" + .input.model else "" end) +
+            (if .input.max_turns then "  \u001b[2mmax_turns=\u001b[0m" + (.input.max_turns | tostring) else "" end))
+        else
+          ("  \u001b[2m\u00b7 " + .name + " " +
+            ((if .input.file_path then (.input.file_path | tostring)
+              elif .input.description then (.input.description | tostring)
+              elif .input.command then (.input.command | tostring)
+              elif .input.pattern then (.input.pattern | tostring)
+              elif .input.query then (.input.query | tostring)
+              elif .input.url then (.input.url | tostring)
+              elif .input.skill then (.input.skill | tostring)
+              else (.input | keys | join(", "))
+              end) | if length > 60 then .[:60] + "\u2026" else . end) + "\u001b[0m")
+        end
       else empty end
     ) // empty
 
-  elif .type == "tool_use_result" then
-    if .tool_use_result.status == "completed" then
-      ("  " + ("  \u2713 " | green) + ((.tool_use_result.totalDurationMs // 0 | . / 1000 | tostring) + "s, " + (.tool_use_result.totalToolUseCount // 0 | tostring) + " tool calls" | dim))
-    else
-      ("  " + ("  \u2717 " + (.tool_use_result.status // "unknown") | red))
-    end
-
-  elif .type == "result" then
-    "\n\u001b[2m\u2500\u2500\u2500 turn complete \u2500\u2500\u2500 cost=\u001b[0m\u001b[35m$" + (.total_cost_usd // 0 | tostring) + "\u001b[0m\u001b[2m  in=" + (.usage.input_tokens // 0 | tostring) + "  out=" + (.usage.output_tokens // 0 | tostring) + "\u001b[0m\n"
+  # ── user messages: subagent completions ──
+  # Only Task tool results have .totalTokens (regular tools like Read/Bash don't).
+  # totalTokens = input + cache_creation + cache_read + output across all subagent turns.
+  elif .type == "user" then
+    (if .tool_use_result.totalTokens then
+      if .tool_use_result.status == "completed" then
+        ("  " + ("  \u2713 " | green) + ((.tool_use_result.totalDurationMs // 0 | . / 1000 | tostring) + "s, " + (.tool_use_result.totalToolUseCount // 0 | tostring) + " tool calls, " + (.tool_use_result.totalTokens // 0 | kfmt) + " tokens" | dim))
+      else
+        ("  " + ("  \u2717 " + (.tool_use_result.status // "unknown") | red))
+      end
+    else empty end) // empty
 
   else empty end
 '
 
-# ─── Stats accumulators ───────────────────────────────────────────
-TOTAL_COST=0
-TOTAL_INPUT_TOKENS=0
-TOTAL_OUTPUT_TOKENS=0
+# ─── Stats accumulators (across all iterations) ─────────────────
+TOTAL_COST=0              # sum of total_cost_usd from result events
+PEAK_CONTEXT=0            # high-water mark: max context window fill across iterations
+TOTAL_SUBAGENT_TOKENS=0   # cumulative tokens consumed by all subagents
 TOTAL_ITERATIONS=0
 START_TIME=$SECONDS
 
@@ -70,8 +96,25 @@ print_summary() {
     echo -e "${BBLUE}├──────────────────────────────────────┤${RST}"
     printf  "${BBLUE}│${RST}  ${DIM}Iterations${RST}    ${BWHITE}%-20s${RST} ${BBLUE}│${RST}\n" "$TOTAL_ITERATIONS"
     printf  "${BBLUE}│${RST}  ${DIM}Wall time${RST}     ${BWHITE}%-20s${RST} ${BBLUE}│${RST}\n" "${mins}m ${secs}s"
-    printf  "${BBLUE}│${RST}  ${DIM}Input tokens${RST}  ${CYAN}%-20s${RST} ${BBLUE}│${RST}\n" "$TOTAL_INPUT_TOKENS"
-    printf  "${BBLUE}│${RST}  ${DIM}Output tokens${RST} ${CYAN}%-20s${RST} ${BBLUE}│${RST}\n" "$TOTAL_OUTPUT_TOKENS"
+    local pct=$(( PEAK_CONTEXT * 100 / 200000 ))
+    local peak_fmt
+    if [ "$PEAK_CONTEXT" -ge 1000000 ] 2>/dev/null; then
+        peak_fmt="$(echo "scale=1; $PEAK_CONTEXT / 1000000" | bc)M"
+    elif [ "$PEAK_CONTEXT" -ge 1000 ] 2>/dev/null; then
+        peak_fmt="$(echo "scale=1; $PEAK_CONTEXT / 1000" | bc)k"
+    else
+        peak_fmt="$PEAK_CONTEXT"
+    fi
+    local sub_fmt
+    if [ "$TOTAL_SUBAGENT_TOKENS" -ge 1000000 ] 2>/dev/null; then
+        sub_fmt="$(echo "scale=1; $TOTAL_SUBAGENT_TOKENS / 1000000" | bc)M"
+    elif [ "$TOTAL_SUBAGENT_TOKENS" -ge 1000 ] 2>/dev/null; then
+        sub_fmt="$(echo "scale=1; $TOTAL_SUBAGENT_TOKENS / 1000" | bc)k"
+    else
+        sub_fmt="$TOTAL_SUBAGENT_TOKENS"
+    fi
+    printf  "${BBLUE}│${RST}  ${DIM}Peak context${RST}  ${CYAN}%-20s${RST} ${BBLUE}│${RST}\n" "${peak_fmt} / 200k (${pct}%)"
+    printf  "${BBLUE}│${RST}  ${DIM}Subagent tokens${RST} ${CYAN}%-16s${RST} ${BBLUE}│${RST}\n" "${sub_fmt}"
     printf  "${BBLUE}│${RST}  ${DIM}Total cost${RST}    ${BMAGENTA}%-20s${RST} ${BBLUE}│${RST}\n" "$(printf '$%.4f' "$TOTAL_COST")"
     echo -e "${BBLUE}└──────────────────────────────────────┘${RST}"
 }
@@ -102,31 +145,58 @@ run_claude() {
     | jq -r --unbuffered "$JQ_FILTER" 2>/dev/null \
     || true
 
+    # Iteration summary: peak context window fill + cost.
+    # Context = max(input + cache_creation + cache_read) across all turns in this
+    # iteration. This is how much of the 200k window the parent agent consumed.
+    # Cost comes from the result event (includes parent + subagents).
+    local iter_line
+    iter_line=$(jq -rs '
+      def kfmt: if . >= 1000000 then ((. / 100000 | floor) / 10 | tostring) + "M"
+                elif . >= 1000 then ((. / 100 | floor) / 10 | tostring) + "k"
+                else tostring end;
+      ([.[] | select(.type == "assistant") |
+        ((.message.usage.input_tokens // 0) +
+         (.message.usage.cache_creation_input_tokens // 0) +
+         (.message.usage.cache_read_input_tokens // 0))] | max // 0) as $peak |
+      ([.[] | select(.type == "result") |
+        (.total_cost_usd // .cost_usd // 0)] | add // 0) as $cost |
+      ($peak * 100 / 200000 | floor) as $pct |
+      "\u001b[2m\u2500\u2500\u2500\u2500\u001b[0m " +
+      ($peak | kfmt) + " / 200k context (" + ($pct | tostring) + "%)" +
+      (if $cost > 0 then "  \u001b[35m$" + ($cost * 10000 | floor / 10000 | tostring) + "\u001b[0m" else "" end)
+    ' "$LAST_LOG_FILE" 2>/dev/null) || iter_line=""
+    [ -n "$iter_line" ] && echo -e "\n  ${iter_line}"
     echo -e "  ${DIM}raw log: ${LAST_LOG_FILE}${RST}"
 }
 
+# Extract per-iteration stats from a completed JSONL log and fold into accumulators.
+# - cost:  from the "result" event (total_cost_usd includes parent + subagents)
+# - peak:  highest context window fill across all assistant turns
+# - sub:   sum of totalTokens from all subagent (Task) tool results
 accumulate_stats() {
     local log_file="$1"
     [ -f "$log_file" ] || return 0
 
     local stats
     stats=$(jq -s '
-      [ .[] | select(.type == "result") ] |
       {
-        cost: (map(.total_cost_usd // 0) | add // 0),
-        input: (map(.usage.input_tokens // 0) | add // 0),
-        output: (map(.usage.output_tokens // 0) | add // 0)
+        cost:  ([ .[] | select(.type == "result") | (.cost_usd // .total_cost_usd // 0) ] | add // 0),
+        peak:  ([ .[] | select(.type == "assistant") |
+                  ((.message.usage.input_tokens // 0) +
+                   (.message.usage.cache_creation_input_tokens // 0) +
+                   (.message.usage.cache_read_input_tokens // 0))] | max // 0),
+        sub:   ([ .[] | select(.type == "user") | .tool_use_result.totalTokens // empty ] | add // 0)
       }
     ' "$log_file" 2>/dev/null) || stats=""
 
     if [ -n "$stats" ]; then
-        local cost input output
+        local cost peak sub
         cost=$(echo "$stats" | jq -r '.cost')
-        input=$(echo "$stats" | jq -r '.input')
-        output=$(echo "$stats" | jq -r '.output')
+        peak=$(echo "$stats" | jq -r '.peak')
+        sub=$(echo "$stats" | jq -r '.sub')
         TOTAL_COST=$(echo "$TOTAL_COST + $cost" | bc 2>/dev/null || echo "$TOTAL_COST")
-        TOTAL_INPUT_TOKENS=$((TOTAL_INPUT_TOKENS + ${input%.*}))
-        TOTAL_OUTPUT_TOKENS=$((TOTAL_OUTPUT_TOKENS + ${output%.*}))
+        [ "${peak%.*}" -gt "$PEAK_CONTEXT" ] 2>/dev/null && PEAK_CONTEXT=${peak%.*}
+        TOTAL_SUBAGENT_TOKENS=$((TOTAL_SUBAGENT_TOKENS + ${sub%.*}))
     fi
     TOTAL_ITERATIONS=$((TOTAL_ITERATIONS + 1))
 }
